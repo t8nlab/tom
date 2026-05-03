@@ -1,0 +1,17 @@
+# Standard TitanPL Extension gitignore
+node_modules/
+dist/
+.env
+
+# Test apps / environments used by developers
+test-app/
+example-server/
+temp-titan/
+
+# Logs and system files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+package-lock.json
+bin/tom-migrate.exe

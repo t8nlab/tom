@@ -1,0 +1,39 @@
+{
+  "name": "@t8n/tom",
+  "version": "1.0.1",
+  "description": "Tom (Titan Object Mapper) is a high-performance, developer-friendly ORM for **Titan Planet**. It provides a `Drizzle-like` developer experience with zero runtime overhead and perfect native type binding.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "tom": "bin/tom.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "titan.json",
+    "utils/",
+    "bin/",
+    "src/",
+    "README.md"
+  ],
+
+  "keywords": [
+    "titanpl",
+    "titan",
+    "extension"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@titanpl/core": "latest",
+    "@titanpl/native": "latest",
+    "@titanpl/node": "latest",
+    "bcryptjs": "^2.4.3",
+    "@titanpl/sdk": "2.0.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6"
+  }
+}
