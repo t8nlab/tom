@@ -35,6 +35,17 @@ app/
 > [!TIP]
 > Add `.titan/` to your `.gitignore`. This directory is automatically generated.
 
+### 3. Configuration (Optional)
+You can customize the default directory structure by creating a `tom.config.json` in your project root:
+
+```json
+{
+  "schema": "app/db/schema",
+  "queries": "app/db/queries",
+  "migrations": ".titan/migrations"
+}
+```
+
 
 ---
 
@@ -76,9 +87,14 @@ export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 100 }),
-  createdAt: timestamp("created_at").defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 ```
+
+### 📅 Date & Time
+Tom supports both standard and timezone-aware timestamps:
+- `timestamp(name, { withTimezone: true })`
+- `timestampz(name)` (Alias for timezone-aware)
 
 ### 🔗 Relationships
 Use `.references()` to define foreign keys:
@@ -90,7 +106,10 @@ import { users } from "./users.js";
 export const posts = pgTable("posts", {
   id: uuid("id").primaryKey(),
   content: text("content").notNull(),
-  authorId: uuid("author_id").references(users.id),
+  authorId: uuid("author_id").references(users.id, { 
+    onDelete: 'cascade', 
+    onUpdate: 'cascade' 
+  }),
 });
 ```
 
@@ -261,7 +280,8 @@ Defines a named parameter for the query.
 - `bigint(name)`: 64-bit integer.
 - `integer(name)`: 32-bit integer.
 - `boolean(name)`: True/False.
-- `timestamp(name)`: Date and time.
+- `timestamp(name, { withTimezone })`: Date and time.
+- `timestampz(name)`: Date and time with timezone.
 - `json(name)`: JSON/JSONB data.
 - `decimal(name)`: Precise numeric type.
 
@@ -271,7 +291,7 @@ Defines a named parameter for the query.
 - `.unique()`: Ensures value uniqueness.
 - `.default(value)`: Sets a static default.
 - `.defaultNow()`: Sets current timestamp as default.
-- `.references(table.column)`: Creates a foreign key link.
+- `.references(table.column, { onDelete, onUpdate })`: Creates a foreign key link with optional cascading.
 
 ---
 
