@@ -54,10 +54,16 @@ func main() {
 	defer conn.Close(context.Background())
 
 	// 3. Find and Execute Migrations
-	migrationsDir := filepath.Join(cwd, ".titan", "migrations")
+	migrationsDir := os.Getenv("MIGRATIONS_DIR")
+	if migrationsDir == "" {
+		migrationsDir = filepath.Join(cwd, ".titan", "migrations")
+	} else if !filepath.IsAbs(migrationsDir) {
+		migrationsDir = filepath.Join(cwd, migrationsDir)
+	}
+
 	files, err := ioutil.ReadDir(migrationsDir)
 	if err != nil {
-		log.Fatalf("Failed to read migrations directory: %v", err)
+		log.Fatalf("Failed to read migrations directory (%s): %v", migrationsDir, err)
 	}
 
 	for _, file := range files {

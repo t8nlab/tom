@@ -93,7 +93,13 @@ export function param(name, typeOverride = null) { return { type: 'param', name,
 export const uuid = (name) => ({ name, type: 'UUID', titanType: 'UUID', modifiers: [] });
 export const varchar = (name, { length } = {}) => ({ name, type: `VARCHAR(${length || 255})`, titanType: 'VARCHAR', modifiers: [] });
 export const text = (name) => ({ name, type: 'TEXT', titanType: 'TEXT', modifiers: [] });
-export const timestamp = (name) => ({ name, type: 'TIMESTAMP', titanType: 'TIMESTAMP', modifiers: [] });
+export const timestamp = (name, opts = {}) => ({ 
+    name, 
+    type: opts.withTimezone ? 'TIMESTAMPTZ' : 'TIMESTAMP', 
+    titanType: opts.withTimezone ? 'TIMESTAMPTZ' : 'TIMESTAMP', 
+    modifiers: [] 
+});
+export const timestampz = (name) => ({ name, type: 'TIMESTAMPTZ', titanType: 'TIMESTAMPTZ', modifiers: [] });
 export const bigint = (name) => ({ name, type: 'BIGINT', titanType: 'BIGINT', modifiers: [] });
 export const boolean = (name) => ({ name, type: 'BOOLEAN', titanType: 'BOOLEAN', modifiers: [] });
 export const integer = (name) => ({ name, type: 'INT', titanType: 'INT', modifiers: [] });
@@ -103,9 +109,12 @@ Object.prototype.primaryKey = function() { this.modifiers.push('PRIMARY KEY'); r
 Object.prototype.notNull = function() { this.modifiers.push('NOT NULL'); return this; };
 Object.prototype.unique = function() { this.modifiers.push('UNIQUE'); return this; };
 Object.prototype.defaultNow = function() { this.modifiers.push('DEFAULT NOW()'); return this; };
-Object.prototype.references = function(column) {
+Object.prototype.references = function(column, opts = {}) {
     // column is expected to be an object like { name, table: { name } }
-    this.modifiers.push(`REFERENCES ${column.table.name}(${column.name})`);
+    let ref = `REFERENCES ${column.table.name}(${column.name})`;
+    if (opts.onDelete) ref += ` ON DELETE ${opts.onDelete.toUpperCase()}`;
+    if (opts.onUpdate) ref += ` ON UPDATE ${opts.onUpdate.toUpperCase()}`;
+    this.modifiers.push(ref);
     return this;
 };
 

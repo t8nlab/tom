@@ -1,6 +1,5 @@
 import * as dsl from "./src/orm/dsl.js";
 import { QueryCompiler } from "./src/compiler/query_compiler.js";
-import { registerExtension } from "./utils/registerExtension.js";
 /**
  * tom - Native TitanPL ORM
  */
@@ -19,6 +18,7 @@ export const {
     text,
     uuid,
     timestamp,
+    timestampz,
     boolean,
     integer,
     json,
@@ -34,6 +34,5 @@ export const {
 export { deleteFrom as delete };
 
 
-registerExtension("tom", tom)
 // Export Compiler
 export { QueryCompiler };

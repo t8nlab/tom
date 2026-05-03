@@ -25,9 +25,9 @@ export interface Column {
     defaultNow(): Column;
     /** 
      * Define a foreign key reference.
-     * @example .references(users.id)
+     * @example .references(users.id, { onDelete: 'cascade' })
      */
-    references(column: Column): Column;
+    references(column: Column, opts?: { onDelete?: string; onUpdate?: string }): Column;
 }
 
 /**
@@ -88,10 +88,17 @@ export function integer(name: string): Column;
 export function boolean(name: string): Column;
 
 /** 
- * Date and time (without time zone).
+ * Date and time (without time zone, unless configured).
+ * @param name The column name in the database.
+ * @param opts Options like withTimezone.
+ */
+export function timestamp(name: string, opts?: { withTimezone?: boolean }): Column;
+
+/** 
+ * Date and time (with time zone).
  * @param name The column name in the database.
  */
-export function timestamp(name: string): Column;
+export function timestampz(name: string): Column;
 
 /** 
  * JSON data.

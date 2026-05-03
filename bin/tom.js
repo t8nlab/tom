@@ -20,6 +20,21 @@ async function ask(question) {
 const CWD = process.cwd();
 const TANFIG_PATH = path.join(CWD, 'tanfig.json');
 const CONFIG_PATH = path.join(CWD, 'tom.config.js');
+const CONFIG_JSON_PATH = path.join(CWD, 'tom.config.json');
+
+async function getConfig() {
+    const defaultConfig = {
+        schema: 'app/db/schema',
+        queries: 'app/db/queries',
+        migrations: '.titan/migrations'
+    };
+    try {
+        const content = await fs.readFile(CONFIG_JSON_PATH, 'utf-8');
+        return { ...defaultConfig, ...JSON.parse(content) };
+    } catch (e) {
+        return defaultConfig;
+    }
+}
 
 // ▽ tom - Colors
 const colors = {
@@ -39,13 +54,21 @@ const help = `
 ${colors.magenta}${colors.bold}▽ tom — TitanPL ORM CLI ${colors.reset}
 
 Usage:
-  tom generate    Scan app/schema and app/queries to generate migrations and pre-compiled functions.
-  tom push        Apply all pending migrations in .titan/migrations to the database.
+  tom generate    Scan schema and queries (from tom.config.json) to generate migrations.
+  tom push        Apply all pending migrations in migrations folder to the database.
   tom migrate     Alias for push.
   tom all         Run generate followed by push.
 
 Options:
   --help          Show this help message.
+
+Configuration:
+  Create a 'tom.config.json' in your project root to customize paths:
+  {
+    "schema": "app/db/schema",
+    "queries": "app/db/queries",
+    "migrations": ".titan/migrations"
+  }
 `;
 
 /**
@@ -97,10 +120,11 @@ async function getDbURI() {
 }
 
 async function generate() {
+    const config = await getConfig();
     console.log(`${icon} ${tomTag} Generating schema and queries...`);
 
-    // 1. Scan app/db/schema for tables
-    const schemaDir = path.join(CWD, 'app', 'db', 'schema');
+    // 1. Scan schema for tables
+    const schemaDir = path.join(CWD, config.schema);
 
     const tables = [];
     const files = (await fs.readdir(schemaDir)).filter(f => f.endsWith('.js'));
@@ -135,6 +159,17 @@ async function generate() {
             modifiers: c.modifiers
         }))
     }));
+
+    // 2.5 Check if migrations are missing
+    const migrationsDir = path.join(CWD, config.migrations);
+    try {
+        await fs.mkdir(migrationsDir, { recursive: true });
+        const existingSqlFiles = (await fs.readdir(migrationsDir)).filter(f => f.endsWith('.sql'));
+        if (existingSqlFiles.length === 0 && previousSnapshot) {
+            console.log(`${icon} ${tomTag} ${colors.yellow}No migration files found. Clearing snapshot to re-generate initial migration.${colors.reset}`);
+            previousSnapshot = null;
+        }
+    } catch (e) {}
 
     // 3. Interactive Risk Assessment
     if (previousSnapshot) {
@@ -238,7 +273,6 @@ async function generate() {
     if (!hasChanges) {
         console.log(`${icon} ${tomTag} No schema changes detected.`);
     } else {
-        const migrationsDir = path.join(CWD, '.titan', 'migrations');
         await fs.mkdir(migrationsDir, { recursive: true });
         
         const existingFiles = (await fs.readdir(migrationsDir)).filter(f => f.endsWith('.sql'));
@@ -252,7 +286,7 @@ async function generate() {
 
         
         await fs.writeFile(path.join(migrationsDir, fileName), migrationSql);
-        console.log(`${colors.green}✓ Migration generated:${colors.reset} .titan/migrations/${fileName}`);
+        console.log(`${colors.green}✓ Migration generated:${colors.reset} ${config.migrations}/${fileName}`);
     }
 
     // Save snapshot
@@ -263,13 +297,14 @@ async function generate() {
 
 
     // 3. Compile Queries
-    const queriesDir = path.join(CWD, 'app', 'db', 'queries');
+    const queriesDir = path.join(CWD, config.queries);
     const compiler = new QueryCompiler();
 
     let compiledJS = 'import { db, types, drift } from "@titanpl/native";\n\n';
     let queryCount = 0;
 
     try {
+        await fs.access(queriesDir);
         const files = (await fs.readdir(queriesDir)).filter(f => f.endsWith('.js'));
         for (const file of files) {
             const module = await import(pathToFileURL(path.join(queriesDir, file)));
@@ -309,6 +344,7 @@ async function generate() {
 
 async function push() {
     await generate();
+    const config = await getConfig();
     console.log(`${icon} ${tomTag} Pushing schema to database...`);
 
     
@@ -326,7 +362,7 @@ async function push() {
         console.log(`${icon} ${tomTag} Using migration tool: ${colors.cyan}${binPath}${colors.reset}`);
         execSync(`"${binPath}"`, { 
             stdio: 'inherit',
-            env: { ...process.env, DB_URI: dbURI } // Pass URI to Go tool if needed
+            env: { ...process.env, DB_URI: dbURI, MIGRATIONS_DIR: config.migrations } 
         });
         console.log(`${colors.green}✓ tom: Push complete!${colors.reset}`);
     } catch (err) {
