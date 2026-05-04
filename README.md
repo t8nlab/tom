@@ -124,6 +124,7 @@ Tom manages your database lifecycle with a focus on safety and speed.
 | `npx tom push` | **Recommended**: Generates new migrations (if needed) and applies them to the DB. |
 | `npx tom generate` | Scans schema/queries and generates versioned migrations + pre-compiled code. |
 | `npx tom migrate` | Alias for `push`. |
+| `npx tom rebase` | Clear `.titan` directory (snapshots/migrations) to start fresh. |
 
 ### ⚠️ Risk Assessment
 When you run `tom push` or `tom generate`, Tom compares your current schema with the last snapshot. If it detects a missing table or column, it will warn you:
@@ -268,6 +269,24 @@ Creates an equality condition.
 Defines a named parameter for the query.
 - **name**: The key you will pass in the action (e.g., `getUserById(db, { id: "..." })`).
 - **typeOverride**: Optional. Force a specific Titan type (e.g., `UUID`, `BIGINT`).
+
+#### `and(...conditions)`
+Combines multiple conditions using SQL `AND`.
+```javascript
+.where(and(eq(users.active, true), eq(users.id, param("id"))))
+```
+
+#### `or(...conditions)`
+Combines multiple conditions using SQL `OR`.
+```javascript
+.where(or(eq(users.role, "admin"), eq(users.role, "superadmin")))
+```
+
+#### `where(t => condition)`
+Functional style for `where` clauses.
+```javascript
+.where(t => eq(t.ownerUid, param("ownerUid")))
+```
 
 ---
 

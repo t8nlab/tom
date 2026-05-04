@@ -82,6 +82,8 @@ export class QueryCompiler {
     }
 
     compileCondition(cond) {
+        if (!cond) return "";
+
         if (cond.type === 'eq') {
             const left = cond.left;
             const right = cond.right;
@@ -89,6 +91,15 @@ export class QueryCompiler {
             const rightSql = this.getValue(right, left.titanType);
             return `${leftSql} = ${rightSql}`;
         }
+
+        if (cond.type === 'and') {
+            return `(${cond.conditions.map(c => this.compileCondition(c)).join(" AND ")})`;
+        }
+
+        if (cond.type === 'or') {
+            return `(${cond.conditions.map(c => this.compileCondition(c)).join(" OR ")})`;
+        }
+
         return "";
     }
 

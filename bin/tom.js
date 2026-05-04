@@ -58,6 +58,7 @@ Usage:
   tom push        Apply all pending migrations in migrations folder to the database.
   tom migrate     Alias for push.
   tom all         Run generate followed by push.
+  tom rebase      Clear .titan directory (snapshots/migrations) to start fresh.
 
 Options:
   --help          Show this help message.
@@ -370,6 +371,25 @@ async function push() {
     }
 }
 
+async function rebase() {
+    console.log(`\n${icon} ${tomTag} ${colors.yellow}${colors.bold}Rebasing Tom...${colors.reset}`);
+    console.log(`This will delete all snapshots and migrations in ${colors.cyan}.titan/${colors.reset}`);
+    const confirm = await ask(`Are you sure you want to proceed? (This cannot be undone) [y/N]: `);
+    
+    if (confirm.toLowerCase() === 'y') {
+        const titanDir = path.join(CWD, '.titan');
+        try {
+            await fs.rm(titanDir, { recursive: true, force: true });
+            console.log(`${colors.green}✓ .titan folder cleared.${colors.reset}`);
+            console.log(`${icon} ${tomTag} You can now run ${colors.cyan}tom generate${colors.reset} to create a clean initial snapshot.`);
+        } catch (e) {
+            console.error(`${colors.red}Error clearing .titan:${colors.reset}`, e.message);
+        }
+    } else {
+        console.log(`${colors.yellow}Rebase cancelled.${colors.reset}`);
+    }
+}
+
 async function main() {
     const command = process.argv[2];
 
@@ -389,6 +409,9 @@ async function main() {
         case 'all':
             await generate();
             await push();
+            break;
+        case 'rebase':
+            await rebase();
             break;
         default:
             console.error(`Unknown command: ${command}`);

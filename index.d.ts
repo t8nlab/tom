@@ -119,8 +119,13 @@ export function decimal(name: string): Column;
 export interface QueryBuilder {
     /** Select specific columns. */
     columns(cols: string[]): QueryBuilder;
-    /** Add a WHERE clause. */
-    where(condition: any): QueryBuilder;
+    /** 
+     * Add a WHERE clause. 
+     * Supports both direct conditions and a functional style with table columns.
+     * @example .where(acc => eq(acc.id, param("id")))
+     * @example .where(acc => and(eq(acc.active, true), eq(acc.id, param("id"))))
+     */
+    where(condition: any | ((table: any) => any)): QueryBuilder;
     /** Add a LIMIT clause. */
     limit(n: number): QueryBuilder;
     /** Set values for INSERT. */
@@ -163,6 +168,16 @@ declare function deleteFrom(table: any): QueryBuilder;
  * Equality condition for WHERE clauses.
  */
 export function eq(left: any, right: any): any;
+
+/**
+ * Logical AND operator for combining multiple conditions.
+ */
+export function and(...conditions: any[]): any;
+
+/**
+ * Logical OR operator for combining multiple conditions.
+ */
+export function or(...conditions: any[]): any;
 
 /**
  * Named parameter for pre-compiled queries.

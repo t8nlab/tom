@@ -16,7 +16,14 @@ export class QueryBuilder {
     }
 
     columns(cols) { this.state.columns = cols; return this; }
-    where(condition) { this.state.where = condition; return this; }
+    where(condition) {
+        if (typeof condition === 'function') {
+            this.state.where = condition(this.state.table);
+        } else {
+            this.state.where = condition;
+        }
+        return this;
+    }
     limit(n) { this.state.limit = n; return this; }
     values(vals) { this.state.values = vals; return this; }
     set(vals) { this.state.set = vals; return this; }
@@ -87,6 +94,8 @@ export { deleteFrom as delete };
 
 
 export function eq(left, right) { return { type: 'eq', left, right }; }
+export function and(...conditions) { return { type: 'and', conditions }; }
+export function or(...conditions) { return { type: 'or', conditions }; }
 export function param(name, typeOverride = null) { return { type: 'param', name, typeOverride }; }
 
 // Data Types
