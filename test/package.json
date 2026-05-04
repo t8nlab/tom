@@ -6,13 +6,15 @@
     "template": "js"
   },
   "dependencies": {
+    "@t8n/google-oauth": "^1.3.0",
     "@t8n/tom": "file:..",
     "@titanpl/cli": "latest",
     "@titanpl/core": "3.0.7",
     "@titanpl/native": "latest",
     "@titanpl/node": "latest",
     "@titanpl/packet": "latest",
-    "@titanpl/route": "latest"
+    "@titanpl/route": "latest",
+    "uuid": "^14.0.0"
   },
   "optionalDependencies": {
     "@titanpl/engine-linux-x64": "latest",

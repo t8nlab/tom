@@ -1,11 +1,8 @@
-import { db, env, drift } from "@titanpl/native";
+// app/db/db.js (db connection)
+import { db as TitanDb, drift } from "@titanpl/native"
 
-
-export const connect = () => {
-  return drift(db.connect(env.DB_URI, {
-    max: 10,
+export const conn = drift(TitanDb.connect(Titan.env.DB_URI, {
+    max: 15,
     min: 1,
-    ssl: true,
-    pool_timeout: 10000,
-  }));
-};
+    ssl: true
+}))

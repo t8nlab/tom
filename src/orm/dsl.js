@@ -25,44 +25,160 @@ export class QueryBuilder {
         return this;
     }
     limit(n) { this.state.limit = n; return this; }
-    values(vals) { this.state.values = vals; return this; }
-    set(vals) { this.state.set = vals; return this; }
+    values(vals) {
+        if (vals && vals.type === 'table') {
+            this.state.values = {};
+            Object.keys(vals.columns).forEach(key => {
+                this.state.values[key] = param(key);
+            });
+        } else {
+            this.state.values = vals;
+        }
+        return this;
+    }
+    set(vals) {
+        if (vals && vals.type === 'table') {
+            this.state.set = {};
+            Object.keys(vals.columns).forEach(key => {
+                this.state.set[key] = param(key);
+            });
+        } else {
+            this.state.set = vals;
+        }
+        return this;
+    }
     returning(cols) { this.state.returning = cols; return this; }
 
 
     toAST() {
         const ast = { ...this.state };
-        
-        // The Executor: This function is what the developer actually calls in their actions
+
         const executor = (conn, params = {}) => {
-            // We use the global 't' object which is always available in Titan
-            // This keeps the library Node-compatible for the CLI while being native in Titan
-            const drift = globalThis.drift || (globalThis.t && t.drift);
-            const types = globalThis.types || (globalThis.t && t.types);
-            
-            if (!drift || !types) {
-                throw new Error("tom ORM: Titan Native APIs (drift/types) not found. Are you running in Titan?");
-            }
+            // Environment-safe access to Titan Native APIs
+            const drift = globalThis.drift || (globalThis.t && globalThis.t.drift);
+            const types = globalThis.types || (globalThis.t && globalThis.t.types);
+            const log = (globalThis.t && t.log);
 
             let sql = "";
             let bindValues = [];
             let pCount = 1;
 
-            if (ast.type === 'select') {
-                sql = `SELECT ${ast.columns.join(', ')} FROM ${ast.table.name}`;
-                if (ast.where) {
-                    const left = ast.where.left.name;
-                    const right = ast.where.right;
-                    if (right.type === 'param') {
-                        sql += ` WHERE ${left} = $${pCount++}`;
-                        const tType = right.typeOverride || ast.where.left.titanType || 'STRING';
-                        bindValues.push(types[tType](params[right.name]));
+            const buildWhere = (condition) => {
+                if (!condition) return "";
+                if (condition.type === 'eq') {
+                    const left = condition.left.name;
+                    const right = condition.right;
+                    if (right && right.type === 'param') {
+                        const tType = right.typeOverride || condition.left.titanType || 'STRING';
+                        try {
+                            bindValues.push(types[tType](params[right.name]));
+                        } catch (e) {
+                            throw new Error(`Failed to bind parameter "${right.name}" as ${tType}: ${e.message}`);
+                        }
+                        return `${left} = $${pCount++}`;
+                    }
+                    return `${left} = ${right}`;
+                } else if (condition.type === 'and') {
+                    return `(${condition.conditions.map(c => buildWhere(c)).join(' AND ')})`;
+                } else if (condition.type === 'or') {
+                    return `(${condition.conditions.map(c => buildWhere(c)).join(' OR ')})`;
+                }
+                return "";
+            };
+
+            try {
+                if (ast.type === 'select') {
+                    const mappedCols = ast.columns.map(c => {
+                        if (typeof c === 'string') {
+                            const col = ast.table[c];
+                            return col ? col.name : c;
+                        }
+                        return c.name || c;
+                    });
+                    sql = `SELECT ${mappedCols.length ? mappedCols.join(', ') : '*'} FROM ${ast.table.name}`;
+                    if (ast.where) {
+                        sql += ` WHERE ${buildWhere(ast.where)}`;
+                    }
+                    if (ast.limit) sql += ` LIMIT ${ast.limit}`;
+                } else if (ast.type === 'insert') {
+                    const colKeys = Object.keys(ast.table.columns);
+                    const colNames = [];
+                    const values = [];
+                    colKeys.forEach(prop => {
+                        const val = ast.values[prop];
+                        const col = ast.table[prop];
+                        if (val && val.type === 'param') {
+                            if (params[val.name] !== undefined) {
+                                colNames.push(col ? col.name : prop);
+                                const tType = val.typeOverride || (col ? col.titanType : 'STRING');
+                                try {
+                                    bindValues.push(types[tType](params[val.name]));
+                                } catch (e) {
+                                    throw new Error(`Failed to bind parameter "${val.name}" as ${tType} for column "${prop}": ${e.message}`);
+                                }
+                                values.push(`$${pCount++}`);
+                            }
+                        } else if (val !== undefined) {
+                            colNames.push(col ? col.name : prop);
+                            values.push(val);
+                        }
+                    });
+                    sql = `INSERT INTO ${ast.table.name} (${colNames.join(', ')}) VALUES (${values.join(', ')})`;
+                    if (ast.returning && ast.returning.length) {
+                        const mappedReturning = ast.returning.map(r => {
+                            if (typeof r === 'string') {
+                                const col = ast.table[r];
+                                return col ? col.name : r;
+                            }
+                            return r.name || r;
+                        });
+                        sql += ` RETURNING ${mappedReturning.join(', ')}`;
+                    }
+                } else if (ast.type === 'update') {
+                    const colKeys = Object.keys(ast.table.columns);
+                    const sets = [];
+                    colKeys.forEach(prop => {
+                        // Skip the primary key in the SET clause if it's usually the ID
+                        if (prop === 'id') return;
+
+                        const val = ast.set[prop];
+                        const col = ast.table[prop];
+                        const colName = col ? col.name : prop;
+                        if (val && val.type === 'param') {
+                            if (params[val.name] !== undefined) {
+                                const tType = val.typeOverride || (col ? col.titanType : 'STRING');
+                                try {
+                                    bindValues.push(types[tType](params[val.name]));
+                                } catch (e) {
+                                    throw new Error(`Failed to bind parameter "${val.name}" as ${tType} for column "${prop}": ${e.message}`);
+                                }
+                                sets.push(`${colName} = $${pCount++}`);
+                            }
+                        } else if (val !== undefined) {
+                            sets.push(`${colName} = ${val}`);
+                        }
+                    });
+                    sql = `UPDATE ${ast.table.name} SET ${sets.join(', ')}`;
+                    if (ast.where) {
+                        sql += ` WHERE ${buildWhere(ast.where)}`;
                     }
                 }
-                if (ast.limit) sql += ` LIMIT ${ast.limit}`;
-            }
+                else if (ast.type === 'delete') {
+                    sql = `DELETE FROM ${ast.table.name}`;
+                    if (ast.where) {
+                        sql += ` WHERE ${buildWhere(ast.where)}`;
+                    }
+                }
 
-            return drift(conn.query(sql, bindValues));
+                const result = drift(conn.query(sql, bindValues));
+
+                return { data: result, error: null };
+            } catch (err) {
+                if (err.message === '__SUSPEND__' || err === '__SUSPEND__') {
+                    throw err;
+                }
+                return { data: null, error: `ORM Engine error: ${err.message}` };
+            }
         };
 
         Object.assign(executor, ast);
@@ -83,7 +199,14 @@ export function pgTable(name, columns) {
         }
     });
 
-    return table;
+    return new Proxy(table, {
+        get(target, prop) {
+            if (typeof prop === 'string' && target.columns[prop]) {
+                return target.columns[prop];
+            }
+            return target[prop];
+        }
+    });
 }
 
 export function select(table) { return new QueryBuilder(table, 'select'); }
@@ -102,23 +225,20 @@ export function param(name, typeOverride = null) { return { type: 'param', name,
 export const uuid = (name) => ({ name, type: 'UUID', titanType: 'UUID', modifiers: [] });
 export const varchar = (name, { length } = {}) => ({ name, type: `VARCHAR(${length || 255})`, titanType: 'VARCHAR', modifiers: [] });
 export const text = (name) => ({ name, type: 'TEXT', titanType: 'TEXT', modifiers: [] });
-export const timestamp = (name, opts = {}) => ({ 
-    name, 
-    type: opts.withTimezone ? 'TIMESTAMPTZ' : 'TIMESTAMP', 
-    titanType: opts.withTimezone ? 'TIMESTAMPTZ' : 'TIMESTAMP', 
-    modifiers: [] 
-});
+export const timestamp = (name) => ({ name, type: 'TIMESTAMP', titanType: 'TIMESTAMP', modifiers: [] });
 export const timestampz = (name) => ({ name, type: 'TIMESTAMPTZ', titanType: 'TIMESTAMPTZ', modifiers: [] });
 export const bigint = (name) => ({ name, type: 'BIGINT', titanType: 'BIGINT', modifiers: [] });
 export const boolean = (name) => ({ name, type: 'BOOLEAN', titanType: 'BOOLEAN', modifiers: [] });
 export const integer = (name) => ({ name, type: 'INT', titanType: 'INT', modifiers: [] });
+export const json = (name) => ({ name, type: 'JSONB', titanType: 'JSON', modifiers: [] });
+export const decimal = (name) => ({ name, type: 'DECIMAL', titanType: 'DECIMAL', modifiers: [] });
 
 // Modifiers
-Object.prototype.primaryKey = function() { this.modifiers.push('PRIMARY KEY'); return this; };
-Object.prototype.notNull = function() { this.modifiers.push('NOT NULL'); return this; };
-Object.prototype.unique = function() { this.modifiers.push('UNIQUE'); return this; };
-Object.prototype.defaultNow = function() { this.modifiers.push('DEFAULT NOW()'); return this; };
-Object.prototype.references = function(column, opts = {}) {
+Object.prototype.primaryKey = function () { this.modifiers.push('PRIMARY KEY'); return this; };
+Object.prototype.notNull = function () { this.modifiers.push('NOT NULL'); return this; };
+Object.prototype.unique = function () { this.modifiers.push('UNIQUE'); return this; };
+Object.prototype.defaultNow = function () { this.modifiers.push('DEFAULT NOW()'); return this; };
+Object.prototype.references = function (column, opts = {}) {
     // column is expected to be an object like { name, table: { name } }
     let ref = `REFERENCES ${column.table.name}(${column.name})`;
     if (opts.onDelete) ref += ` ON DELETE ${opts.onDelete.toUpperCase()}`;
@@ -126,4 +246,3 @@ Object.prototype.references = function(column, opts = {}) {
     this.modifiers.push(ref);
     return this;
 };
-

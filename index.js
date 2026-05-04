@@ -28,6 +28,8 @@ export const {
     update,
     delete: deleteFrom,
     eq,
+    and,
+    or,
     param
 } = dsl;
 

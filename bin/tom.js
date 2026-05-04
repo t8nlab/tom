@@ -146,7 +146,7 @@ async function generate() {
 
 
     // 2. Load Previous Snapshot for Diffing
-    const snapshotPath = path.join(CWD, '.titan', 'orm', 'snapshot.json');
+    const snapshotPath = path.join(CWD, '.titan', 'tom', 'snapshot.json');
     let previousSnapshot = null;
     try {
         previousSnapshot = JSON.parse(await fs.readFile(snapshotPath, 'utf-8'));
@@ -228,7 +228,7 @@ async function generate() {
             if (!prevTable) {
                 // New Table
                 const tableObj = tables.find(t => t.name === currentTable.name);
-                migrationSql += `CREATE TABLE ${currentTable.name} (\n`;
+                migrationSql += `CREATE TABLE IF NOT EXISTS ${currentTable.name} (\n`;
                 const columns = Object.values(tableObj.columns).map(col => {
                     let line = `  ${col.name} ${col.type}`;
                     if (col.modifiers.length > 0) line += ` ${col.modifiers.join(' ')}`;
@@ -245,6 +245,10 @@ async function generate() {
                         migrationSql += `ALTER TABLE ${currentTable.name} ADD COLUMN IF NOT EXISTS ${currentCol.name} ${currentCol.type}`;
                         if (currentCol.modifiers.length > 0) migrationSql += ` ${currentCol.modifiers.join(' ')}`;
                         migrationSql += ';\n';
+                        hasChanges = true;
+                    } else if (prevCol.type !== currentCol.type) {
+                        // Type changed!
+                        migrationSql += `ALTER TABLE ${currentTable.name} ALTER COLUMN ${currentCol.name} SET DATA TYPE ${currentCol.type} USING ${currentCol.name}::${currentCol.type};\n`;
                         hasChanges = true;
                     }
                 }
@@ -291,7 +295,7 @@ async function generate() {
     }
 
     // Save snapshot
-    const outputDir = path.join(CWD, '.titan', 'orm');
+    const outputDir = path.join(CWD, '.titan', 'tom');
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(snapshotPath, JSON.stringify(currentSnapshot, null, 2));
 
@@ -335,10 +339,10 @@ async function generate() {
     }
 
 
-    const ormDir = path.join(CWD, '.titan', 'orm');
+    const ormDir = path.join(CWD, '.titan', 'tom');
     await fs.mkdir(ormDir, { recursive: true });
     await fs.writeFile(path.join(ormDir, 'queries.js'), compiledJS);
-    console.log(`${colors.green}✓ Compiled ${queryCount} queries:${colors.reset} .titan/orm/queries.js`);
+    console.log(`${colors.green}✓ Compiled ${queryCount} queries:${colors.reset} .titan/tom/queries.js`);
 
 
 }
