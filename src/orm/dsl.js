@@ -170,7 +170,24 @@ export class QueryBuilder {
                     }
                 }
 
-                const result = drift(conn.query(sql, bindValues));
+                let result = drift(conn.query(sql, bindValues));
+
+                // Map results back to property names if it's a select or returning query
+                if (result && Array.isArray(result) && ast.table && ast.table.columns) {
+                    const colMap = {};
+                    Object.entries(ast.table.columns).forEach(([prop, col]) => {
+                        if (col.name) colMap[col.name] = prop;
+                    });
+
+                    result = result.map(row => {
+                        const mappedRow = {};
+                        Object.entries(row).forEach(([colName, value]) => {
+                            const propName = colMap[colName] || colName;
+                            mappedRow[propName] = value;
+                        });
+                        return mappedRow;
+                    });
+                }
 
                 return { data: result, error: null };
             } catch (err) {

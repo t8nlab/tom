@@ -10,11 +10,7 @@ export const findUserByEmail = select(users)
   .toAST();
 
 export const createUser = insert(users)
-  .values({
-    uid: param("uid"),
-    displayName: param("displayName"),
-    email: param("email"),
-  })
+  .values(users)
   .returning(["uid", "email", "displayName"])
   .toAST();
 
@@ -37,34 +33,13 @@ export const findAccountByOwnerAndProvider = select(accounts)
   .toAST();
 
 export const createAccount = insert(accounts)
-  .values({
-    id: param("id"),
-    ownerUid: param("ownerUid"),
-    accountName: param("accountName"),
-    email: param("email"),
-    picture: param("picture"),
-    provider: param("provider"),
-    providerUserId: param("providerUserId"),
-    accessToken: param("accessToken"),
-    refreshToken: param("refreshToken"),
-    expiresAt: param("expiresAt"),
-    refreshExpiresAt: param("refreshExpiresAt")
-  })
+  .values(accounts)
   .returning(["id", "ownerUid", "providerUserId", "email", "accountName"])
   .toAST();
 
-export const updateAccountTokens = update(accounts)
-  .set({
-    accessToken: param("accessToken"),
-    refreshToken: param("refreshToken"),
-    expiresAt: param("expiresAt"),
-    refreshExpiresAt: param("refreshExpiresAt")
-  })
-  .where(t => and(
-    eq(t.ownerUid, param("ownerUid")),
-    eq(t.provider, param("provider")),
-    eq(t.providerUserId, param("providerUserId"))
-  ))
+export const updateAccount = update(accounts)
+  .set(accounts)
+  .where(t => eq(t.id, param("id")))
   .toAST();
 
 export const findAccountsByOwner = select(accounts)
