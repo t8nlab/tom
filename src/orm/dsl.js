@@ -47,13 +47,33 @@ export class QueryBuilder {
         }
         return this;
     }
-    returning(cols) { this.state.returning = cols; return this; }
+    returning(cols) {
+        if (cols && cols.type === 'table') {
+            this.state.returning = Object.keys(cols.columns);
+        } else {
+            this.state.returning = cols;
+        }
+        return this;
+    }
 
 
     toAST() {
         const ast = { ...this.state };
 
-        const executor = (conn, params = {}) => {
+        const executor = (connOrParams, maybeParams) => {
+            let conn = connOrParams;
+            let params = maybeParams || {};
+
+            // If first arg isn't a connection-like object, assume it's params and try to find a global connection
+            if (connOrParams && !connOrParams.query && !connOrParams.execute) {
+                params = connOrParams;
+                conn = globalThis.t?.db || globalThis.db || globalThis.conn;
+            }
+
+            if (!conn) {
+                return { data: null, error: "No database connection provided and no global connection found (t.db or db or conn)." };
+            }
+
             // Environment-safe access to Titan Native APIs
             const drift = globalThis.drift || (globalThis.t && globalThis.t.drift);
             const types = globalThis.types || (globalThis.t && globalThis.t.types);
@@ -70,8 +90,15 @@ export class QueryBuilder {
                     const right = condition.right;
                     if (right && right.type === 'param') {
                         const tType = right.typeOverride || condition.left.titanType || 'STRING';
+                        const val = params[right.name];
+                        
+                        // Validation
+                        if (condition.left.titanType === 'VARCHAR' && condition.left.length && val && val.length > condition.left.length) {
+                            throw new Error(`Validation error: "${right.name}" length (${val.length}) exceeds maximum (${condition.left.length}) for column "${condition.left.name}"`);
+                        }
+
                         try {
-                            bindValues.push(types[tType](params[right.name]));
+                            bindValues.push(types[tType](val));
                         } catch (e) {
                             throw new Error(`Failed to bind parameter "${right.name}" as ${tType}: ${e.message}`);
                         }
@@ -111,8 +138,15 @@ export class QueryBuilder {
                             if (params[val.name] !== undefined) {
                                 colNames.push(col ? col.name : prop);
                                 const tType = val.typeOverride || (col ? col.titanType : 'STRING');
+                                const paramVal = params[val.name];
+
+                                // Validation
+                                if (col && col.titanType === 'VARCHAR' && col.length && paramVal && paramVal.length > col.length) {
+                                    throw new Error(`Validation error: "${val.name}" length (${paramVal.length}) exceeds maximum (${col.length}) for column "${col.name}"`);
+                                }
+
                                 try {
-                                    bindValues.push(types[tType](params[val.name]));
+                                    bindValues.push(types[tType](paramVal));
                                 } catch (e) {
                                     throw new Error(`Failed to bind parameter "${val.name}" as ${tType} for column "${prop}": ${e.message}`);
                                 }
@@ -124,14 +158,16 @@ export class QueryBuilder {
                         }
                     });
                     sql = `INSERT INTO ${ast.table.name} (${colNames.join(', ')}) VALUES (${values.join(', ')})`;
-                    if (ast.returning && ast.returning.length) {
-                        const mappedReturning = ast.returning.map(r => {
-                            if (typeof r === 'string') {
-                                const col = ast.table[r];
-                                return col ? col.name : r;
-                            }
-                            return r.name || r;
-                        });
+                    
+                    const mappedReturning = (ast.returning && ast.returning.length) ? ast.returning.map(r => {
+                        if (typeof r === 'string') {
+                            const col = ast.table[r];
+                            return col ? col.name : r;
+                        }
+                        return r.name || r;
+                    }) : [];
+
+                    if (mappedReturning.length) {
                         sql += ` RETURNING ${mappedReturning.join(', ')}`;
                     }
                 } else if (ast.type === 'update') {
@@ -147,8 +183,15 @@ export class QueryBuilder {
                         if (val && val.type === 'param') {
                             if (params[val.name] !== undefined) {
                                 const tType = val.typeOverride || (col ? col.titanType : 'STRING');
+                                const paramVal = params[val.name];
+
+                                // Validation
+                                if (col && col.titanType === 'VARCHAR' && col.length && paramVal && paramVal.length > col.length) {
+                                    throw new Error(`Validation error: "${val.name}" length (${paramVal.length}) exceeds maximum (${col.length}) for column "${col.name}"`);
+                                }
+
                                 try {
-                                    bindValues.push(types[tType](params[val.name]));
+                                    bindValues.push(types[tType](paramVal));
                                 } catch (e) {
                                     throw new Error(`Failed to bind parameter "${val.name}" as ${tType} for column "${prop}": ${e.message}`);
                                 }
@@ -161,6 +204,18 @@ export class QueryBuilder {
                     sql = `UPDATE ${ast.table.name} SET ${sets.join(', ')}`;
                     if (ast.where) {
                         sql += ` WHERE ${buildWhere(ast.where)}`;
+                    }
+
+                    const mappedReturning = (ast.returning && ast.returning.length) ? ast.returning.map(r => {
+                        if (typeof r === 'string') {
+                            const col = ast.table[r];
+                            return col ? col.name : r;
+                        }
+                        return r.name || r;
+                    }) : [];
+
+                    if (mappedReturning.length) {
+                        sql += ` RETURNING ${mappedReturning.join(', ')}`;
                     }
                 }
                 else if (ast.type === 'delete') {
@@ -189,10 +244,27 @@ export class QueryBuilder {
                     });
                 }
 
-                return { data: result, error: null };
+                let response = { data: result, error: null };
+
+                // Handle single-result mode for limit(1)
+                if (ast.limit === 1 && ast.type === 'select') {
+                    return (result && result.length) ? result[0] : null;
+                }
+                
+                // For insert/update with returning(1) or if explicitly requested
+                if (ast.limit === 1 && (ast.type === 'insert' || ast.type === 'update')) {
+                     return (result && result.length) ? result[0] : null;
+                }
+
+                return response;
             } catch (err) {
                 if (err.message === '__SUSPEND__' || err === '__SUSPEND__') {
                     throw err;
+                }
+                // In single result mode, we might want to throw or return null with a log
+                if (ast.limit === 1) {
+                    if (log) log.error(`ORM Engine error: ${err.message}`);
+                    return null;
                 }
                 return { data: null, error: `ORM Engine error: ${err.message}` };
             }
@@ -240,7 +312,7 @@ export function param(name, typeOverride = null) { return { type: 'param', name,
 
 // Data Types
 export const uuid = (name) => ({ name, type: 'UUID', titanType: 'UUID', modifiers: [] });
-export const varchar = (name, { length } = {}) => ({ name, type: `VARCHAR(${length || 255})`, titanType: 'VARCHAR', modifiers: [] });
+export const varchar = (name, { length } = {}) => ({ name, type: `VARCHAR(${length || 255})`, titanType: 'VARCHAR', length: length || 255, modifiers: [] });
 export const text = (name) => ({ name, type: 'TEXT', titanType: 'TEXT', modifiers: [] });
 export const timestamp = (name) => ({ name, type: 'TIMESTAMP', titanType: 'TIMESTAMP', modifiers: [] });
 export const timestampz = (name) => ({ name, type: 'TIMESTAMPTZ', titanType: 'TIMESTAMPTZ', modifiers: [] });

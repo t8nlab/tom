@@ -43,10 +43,7 @@ export default defineAction((req) => {
   }
 
   // 1. Check if this Google account is already linked
-  const accountResult = findAccountByProviderId(conn, {
-    providerUserId: googleUserId,
-    provider: 'google'
-  });
+  const accountResult = findAccountByProviderId();
 
   let account = accountResult.data?.[0];
 
