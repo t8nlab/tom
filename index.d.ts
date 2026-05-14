@@ -117,7 +117,7 @@ export function decimal(name: string): Column;
  * Smart Result type. 
  * Behaves as an array of T, but also allows direct access to the first element's properties.
  */
-export type SmartArray<T> = T[] & T & {
+export type TomeResult<T> = T[] & T & {
     /** Error message if the query failed, otherwise null. */
     error: string | null;
     /** Reference to the raw data array. */
@@ -180,7 +180,7 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     
     /** 
      * Add a LIMIT clause. 
-     * If n is 1, toAST() will return a single object/null instead of a SmartArray.
+     * If n is 1, toAST() will return a single object/null instead of a TomeResult.
      */
     limit<N extends number>(n: N): QueryBuilder<TParams, TResult, N extends 1 ? true : false>;
     
@@ -210,7 +210,7 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     /** 
      * Convert the builder state to an AST for compilation. 
      */
-    toAST(): TomQuery<TParams, IsSingle extends true ? (TResult | null) : SmartArray<TResult>>;
+    toAST(): TomQuery<TParams, IsSingle extends true ? (TResult | null) : TomeResult<TResult>>;
 }
 
 /**
