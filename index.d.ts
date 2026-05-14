@@ -114,10 +114,11 @@ export function json(name: string): Column;
 export function decimal(name: string): Column;
 
 /**
- * Smart Result type. 
- * Behaves as an array of T, but also allows direct access to the first element's properties.
+ * TomResult type. 
+ * Behaves as an array of T, but also provides direct access to the properties of T (the first element).
+ * This allows syntax like `result.id` instead of `result[0].id` while keeping the array features.
  */
-export type TomeResult<T> = T[] & T & {
+export type TomResult<T> = Array<T> & T & {
     /** Error message if the query failed, otherwise null. */
     error: string | null;
     /** Reference to the raw data array. */
@@ -128,6 +129,7 @@ export type TomeResult<T> = T[] & T & {
 
 /**
  * A compiled tom query executor.
+ * Supports both manual connection passing and automatic global connection fallback.
  */
 export type TomQuery<TParams = Record<string, any>, TResult = any> = {
     /**
@@ -180,12 +182,12 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     
     /** 
      * Add a LIMIT clause. 
-     * If n is 1, toAST() will return a single object/null instead of a TomeResult.
+     * If n is 1, toAST() will return a single object/null instead of a TomResult array.
      */
     limit<N extends number>(n: N): QueryBuilder<TParams, TResult, N extends 1 ? true : false>;
     
     /** 
-     * Explicitly mark the query to return a single result (or null) instead of an array.
+     * Explicitly mark the query to return a single result (or null) instead of a TomResult.
      */
     single(): QueryBuilder<TParams, TResult, true>;
 
@@ -210,7 +212,7 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     /** 
      * Convert the builder state to an AST for compilation. 
      */
-    toAST(): TomQuery<TParams, IsSingle extends true ? (TResult | null) : TomeResult<TResult>>;
+    toAST(): TomQuery<TParams, IsSingle extends true ? (TResult | null) : TomResult<TResult>>;
 }
 
 /**

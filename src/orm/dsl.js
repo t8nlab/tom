@@ -253,20 +253,21 @@ export class QueryBuilder {
                     return (result && result.length) ? result[0] : null;
                 }
 
-                // Smart Result Proxy for multi-results
+                // TomResult Proxy for multi-results
                 const response = result || [];
                 const proxy = new Proxy(response, {
                     get(target, prop) {
                         if (prop === 'error') return target.__error || null;
                         if (prop === 'data') return target;
                         if (prop === 'isTomResult') return true;
+                        if (prop === 'isTomResultProxy') return true;
                         
                         if (prop in target) {
                             const val = target[prop];
                             return typeof val === 'function' ? val.bind(target) : val;
                         }
                         
-                        // Fallback to first element for direct access (with warning in mind, only if not ambiguous)
+                        // TomResult: Fallback to first element for direct access
                         if (target.length > 0 && target[0] && typeof target[0] === 'object') {
                              return target[0][prop];
                         }
