@@ -114,19 +114,20 @@ export function json(name: string): Column;
 export function decimal(name: string): Column;
 
 /**
- * Result of a tom query execution.
+ * Smart Result type. 
+ * Behaves as an array of T, but also allows direct access to the first element's properties.
  */
-export interface QueryResult<T> {
-    /** The data returned from the query. */
-    data: T[] | null;
+export type SmartArray<T> = T[] & T & {
     /** Error message if the query failed, otherwise null. */
     error: string | null;
-}
+    /** Reference to the raw data array. */
+    data: T[] | null;
+    /** Whether this is a tom result. */
+    isTomResult: boolean;
+};
 
 /**
  * A compiled tom query executor.
- * Supports both manual connection passing and automatic global connection fallback.
- * If the query uses .limit(1), it returns the object directly instead of a QueryResult.
  */
 export type TomQuery<TParams = Record<string, any>, TResult = any> = {
     /**
@@ -134,13 +135,13 @@ export type TomQuery<TParams = Record<string, any>, TResult = any> = {
      * @param connection Database connection
      * @param params Query parameters
      */
-    (connection: any, params: TParams): TResult extends any[] ? QueryResult<TResult[number]> : TResult;
+    (connection: any, params: TParams): TResult;
     
     /**
      * Execute the query using the global connection (t.db or db).
      * @param params Query parameters
      */
-    (params: TParams): TResult extends any[] ? QueryResult<TResult[number]> : TResult;
+    (params: TParams): TResult;
     
     /** Whether this is a tom query. */
     isTomQuery: boolean;
@@ -179,10 +180,15 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     
     /** 
      * Add a LIMIT clause. 
-     * If n is 1, toAST() will return a single object/null instead of a QueryResult array.
+     * If n is 1, toAST() will return a single object/null instead of a SmartArray.
      */
     limit<N extends number>(n: N): QueryBuilder<TParams, TResult, N extends 1 ? true : false>;
     
+    /** 
+     * Explicitly mark the query to return a single result (or null) instead of an array.
+     */
+    single(): QueryBuilder<TParams, TResult, true>;
+
     /** 
      * Set values for INSERT. 
      * Parameters used here will be automatically required in the final query.
@@ -203,9 +209,8 @@ export interface QueryBuilder<TParams = {}, TResult = any, IsSingle = false> {
     
     /** 
      * Convert the builder state to an AST for compilation. 
-     * Returns a typed function that accepts (connection, params) or just (params).
      */
-    toAST(): TomQuery<TParams, IsSingle extends true ? TResult | null : TResult[]>;
+    toAST(): TomQuery<TParams, IsSingle extends true ? (TResult | null) : SmartArray<TResult>>;
 }
 
 /**

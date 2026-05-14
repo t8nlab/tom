@@ -11,9 +11,12 @@ export class QueryBuilder {
             values: null,
             set: null,
             returning: [],
-            params: []
+            params: [],
+            isSingle: false
         };
     }
+
+    single() { this.state.isSingle = true; return this; }
 
     columns(cols) { this.state.columns = cols; return this; }
     where(condition) {
@@ -244,29 +247,53 @@ export class QueryBuilder {
                     });
                 }
 
-                let response = { data: result, error: null };
+                const isSingle = ast.isSingle || ast.limit === 1 || (ast.type === 'insert' && !Array.isArray(ast.values));
 
-                // Handle single-result mode for limit(1)
-                if (ast.limit === 1 && ast.type === 'select') {
+                if (isSingle) {
                     return (result && result.length) ? result[0] : null;
                 }
-                
-                // For insert/update with returning(1) or if explicitly requested
-                if (ast.limit === 1 && (ast.type === 'insert' || ast.type === 'update')) {
-                     return (result && result.length) ? result[0] : null;
-                }
 
-                return response;
+                // Smart Result Proxy for multi-results
+                const response = result || [];
+                const proxy = new Proxy(response, {
+                    get(target, prop) {
+                        if (prop === 'error') return target.__error || null;
+                        if (prop === 'data') return target;
+                        if (prop === 'isTomResult') return true;
+                        
+                        if (prop in target) {
+                            const val = target[prop];
+                            return typeof val === 'function' ? val.bind(target) : val;
+                        }
+                        
+                        // Fallback to first element for direct access (with warning in mind, only if not ambiguous)
+                        if (target.length > 0 && target[0] && typeof target[0] === 'object') {
+                             return target[0][prop];
+                        }
+                        return undefined;
+                    }
+                });
+                return proxy;
             } catch (err) {
                 if (err.message === '__SUSPEND__' || err === '__SUSPEND__') {
                     throw err;
                 }
-                // In single result mode, we might want to throw or return null with a log
-                if (ast.limit === 1) {
-                    if (log) log.error(`ORM Engine error: ${err.message}`);
-                    return null;
-                }
-                return { data: null, error: `ORM Engine error: ${err.message}` };
+
+                const errorMsg = `[tom] Database Error: ${err.message}${err.detail ? ` (${err.detail})` : ''}${err.hint ? ` - Hint: ${err.hint}` : ''}`;
+                if (log) log.error(errorMsg);
+
+                const isSingle = ast.isSingle || ast.limit === 1 || (ast.type === 'insert' && !Array.isArray(ast.values));
+                if (isSingle) return null;
+
+                const errResponse = [];
+                errResponse.__error = errorMsg;
+                return new Proxy(errResponse, {
+                    get(target, prop) {
+                        if (prop === 'error') return target.__error;
+                        if (prop === 'data') return null;
+                        return target[prop];
+                    }
+                });
             }
         };
 
