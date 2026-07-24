@@ -303,14 +303,36 @@ Functional style for `where` clauses.
 - `timestampz(name)`: Date and time with timezone.
 - `json(name)`: JSON/JSONB data.
 - `decimal(name)`: Precise numeric type.
+- `numeric(name, { precision, scale })`: Custom precision/scale numeric decimal.
+- `pgEnum(name, values)`: Define a custom PostgreSQL enum type.
 
 ### Column Modifiers
 - `.primaryKey()`: Marks as the primary identifier.
 - `.notNull()`: Prevents null values.
 - `.unique()`: Ensures value uniqueness.
-- `.default(value)`: Sets a static default.
+- `.default(value)`: Sets a static or casted default (supports strings, numbers, enums, or `sql` tags).
 - `.defaultNow()`: Sets current timestamp as default.
+- `.defaultRandom()`: Sets `gen_random_uuid()` as default for UUID columns.
 - `.references(table.column, { onDelete, onUpdate })`: Creates a foreign key link with optional cascading.
+
+### Table Indexes & Constraints
+You can define indexes on a table by passing a callback function as the third argument to `pgTable`:
+
+```javascript
+import { pgTable, integer, index, uniqueIndex } from "@t8n/tom";
+
+export const users = pgTable("users", {
+  id: integer("id"),
+}, (table) => [
+  index("users_id_idx").on(table.id)
+]);
+```
+
+- `index(name).on(...columns)`: Defines a standard database index.
+- `uniqueIndex(name).on(...columns)`: Defines a unique database index.
+
+### SQL Templating Helper
+- `sql` strings `` or `sql('expression')`: Write raw SQL expressions (e.g. for default values like `.default(sql`random()`)`).
 
 ---
 

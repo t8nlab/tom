@@ -94,7 +94,7 @@ export class QueryBuilder {
                     if (right && right.type === 'param') {
                         const tType = right.typeOverride || condition.left.titanType || 'STRING';
                         const val = params[right.name];
-                        
+
                         // Validation
                         if (condition.left.titanType === 'VARCHAR' && condition.left.length && val && val.length > condition.left.length) {
                             throw new Error(`Validation error: "${right.name}" length (${val.length}) exceeds maximum (${condition.left.length}) for column "${condition.left.name}"`);
@@ -161,7 +161,7 @@ export class QueryBuilder {
                         }
                     });
                     sql = `INSERT INTO ${ast.table.name} (${colNames.join(', ')}) VALUES (${values.join(', ')})`;
-                    
+
                     const mappedReturning = (ast.returning && ast.returning.length) ? ast.returning.map(r => {
                         if (typeof r === 'string') {
                             const col = ast.table[r];
@@ -261,15 +261,15 @@ export class QueryBuilder {
                         if (prop === 'data') return target;
                         if (prop === 'isTomResult') return true;
                         if (prop === 'isTomResultProxy') return true;
-                        
+
                         if (prop in target) {
                             const val = target[prop];
                             return typeof val === 'function' ? val.bind(target) : val;
                         }
-                        
+
                         // TomResult: Fallback to first element for direct access
                         if (target.length > 0 && target[0] && typeof target[0] === 'object') {
-                             return target[0][prop];
+                            return target[0][prop];
                         }
                         return undefined;
                     }
@@ -306,8 +306,10 @@ export class QueryBuilder {
     }
 }
 
-export function pgTable(name, columns) {
+export function pgTable(name, columns, extraConfig) {
     const table = { type: 'table', name, columns };
+    table.indexes = [];
+
     Object.entries(columns).forEach(([prop, col]) => {
         col.propertyName = prop;
         col.table = table;
@@ -315,6 +317,38 @@ export function pgTable(name, columns) {
             table[prop] = col;
         }
     });
+
+    // Evaluate index callbacks if present
+    if (typeof extraConfig === 'function') {
+        const result = extraConfig(table);
+        if (Array.isArray(result)) {
+            table.indexes.push(...result);
+        } else if (result && typeof result === 'object') {
+            Object.values(result).forEach(idx => {
+                table.indexes.push(idx);
+            });
+        }
+    }
+
+    // If there is a column named 'name', wrap it to behave as the table name string
+    if (columns.name) {
+        const col = columns.name;
+        const specialName = new String(name);
+        Object.assign(specialName, col);
+        specialName.toJSON = () => name;
+        specialName.toString = () => name;
+        columns.name = specialName;
+    }
+
+    // If there is a column named 'type', wrap it to behave as the string 'table'
+    if (columns.type) {
+        const col = columns.type;
+        const specialType = new String('table');
+        Object.assign(specialType, col);
+        specialType.toJSON = () => 'table';
+        specialType.toString = () => 'table';
+        columns.type = specialType;
+    }
 
     return new Proxy(table, {
         get(target, prop) {
@@ -342,7 +376,7 @@ export function param(name, typeOverride = null) { return { type: 'param', name,
 export const uuid = (name) => ({ name, type: 'UUID', titanType: 'UUID', modifiers: [] });
 export const varchar = (name, { length } = {}) => ({ name, type: `VARCHAR(${length || 255})`, titanType: 'VARCHAR', length: length || 255, modifiers: [] });
 export const text = (name) => ({ name, type: 'TEXT', titanType: 'TEXT', modifiers: [] });
-export const timestamp = (name) => ({ name, type: 'TIMESTAMP', titanType: 'TIMESTAMP', modifiers: [] });
+const tomTimestamp = (name) => ({ name, type: 'TIMESTAMP', titanType: 'TIMESTAMP', modifiers: [] });
 export const timestampz = (name) => ({ name, type: 'TIMESTAMPTZ', titanType: 'TIMESTAMPTZ', modifiers: [] });
 export const bigint = (name) => ({ name, type: 'BIGINT', titanType: 'BIGINT', modifiers: [] });
 export const boolean = (name) => ({ name, type: 'BOOLEAN', titanType: 'BOOLEAN', modifiers: [] });
@@ -350,16 +384,152 @@ export const integer = (name) => ({ name, type: 'INT', titanType: 'INT', modifie
 export const json = (name) => ({ name, type: 'JSONB', titanType: 'JSON', modifiers: [] });
 export const decimal = (name) => ({ name, type: 'DECIMAL', titanType: 'DECIMAL', modifiers: [] });
 
+// Schema / Drizzle-like Helpers
+/**
+ * Define a custom PostgreSQL enum type.
+ * @param {string} name Enum type name in the database.
+ * @param {string[]} values Allowed values for the enum.
+ * @returns {EnumDefinition} The enum creator function.
+ */
+export function pgEnum(name, values) {
+    const fn = (colName) => {
+        const col = text(colName);
+        col.type = `"${name}"`;
+        col.titanType = 'STRING';
+        col.isEnum = true;
+        col.enumName = name;
+        return col;
+    };
+    fn.isEnumDefinition = true;
+    fn.enumName = name;
+    fn.values = values;
+    return fn;
+}
+
+/**
+ * Define a custom numeric (arbitrary precision) decimal type.
+ * @param {string} name Column name.
+ * @param {object} [opts] Options.
+ * @param {number} [opts.precision] Max number of digits.
+ * @param {number} [opts.scale] Number of digits after decimal point.
+ * @returns {Column} Column definition.
+ */
+export function numeric(name, opts) {
+    let type = 'NUMERIC';
+    if (opts && opts.precision !== undefined) {
+        if (opts.scale !== undefined) {
+            type = `NUMERIC(${opts.precision}, ${opts.scale})`;
+        } else {
+            type = `NUMERIC(${opts.precision})`;
+        }
+    }
+    return { name, type, titanType: 'DECIMAL', modifiers: [] };
+}
+
+/**
+ * Define a timestamp column.
+ * @param {string} name Column name.
+ * @param {object} [opts] Options.
+ * @param {boolean} [opts.withTimezone] Whether to use timezone (TIMESTAMPTZ).
+ * @returns {Column} Column definition.
+ */
+export function timestamp(name, opts) {
+    if (opts && opts.withTimezone) {
+        return { name, type: 'TIMESTAMPTZ', titanType: 'TIMESTAMPTZ', modifiers: [] };
+    }
+    return tomTimestamp(name);
+}
+
+/**
+ * Define a database index.
+ * @param {string} name Index name.
+ * @returns {Index} Index definition.
+ */
+export function index(name) {
+    return {
+        name,
+        isUnique: false,
+        on(...columns) {
+            this.columns = columns;
+            return this;
+        }
+    };
+}
+
+/**
+ * Define a unique database index.
+ * @param {string} name Index name.
+ * @returns {Index} Index definition.
+ */
+export function uniqueIndex(name) {
+    return {
+        name,
+        isUnique: true,
+        on(...columns) {
+            this.columns = columns;
+            return this;
+        }
+    };
+}
+
+/**
+ * Template tag/function for writing raw SQL.
+ * @param {TemplateStringsArray|string} strings Raw SQL string or template array.
+ * @param {...any} values Template values.
+ * @returns {Sql} Raw SQL expression object.
+ */
+export function sql(strings, ...values) {
+    let query = "";
+    if (Array.isArray(strings)) {
+        for (let i = 0; i < strings.length; i++) {
+            query += strings[i];
+            if (i < values.length) {
+                query += values[i];
+            }
+        }
+    } else {
+        query = strings;
+    }
+    return {
+        type: 'sql',
+        sql: query,
+        toString() { return this.sql; }
+    };
+}
+
 // Modifiers
 Object.prototype.primaryKey = function () { this.modifiers.push('PRIMARY KEY'); return this; };
 Object.prototype.notNull = function () { this.modifiers.push('NOT NULL'); return this; };
 Object.prototype.unique = function () { this.modifiers.push('UNIQUE'); return this; };
 Object.prototype.defaultNow = function () { this.modifiers.push('DEFAULT NOW()'); return this; };
+
+// Modify column prototype for references (avoid pushing fkey inline)
 Object.prototype.references = function (column, opts = {}) {
-    // column is expected to be an object like { name, table: { name } }
-    let ref = `REFERENCES ${column.table.name}(${column.name})`;
-    if (opts.onDelete) ref += ` ON DELETE ${opts.onDelete.toUpperCase()}`;
-    if (opts.onUpdate) ref += ` ON UPDATE ${opts.onUpdate.toUpperCase()}`;
-    this.modifiers.push(ref);
+    this.reference = { column, opts };
     return this;
 };
+
+// Modify column prototypes to inject missing modifiers
+if (!Object.prototype.default) {
+    Object.prototype.default = function (val) {
+        let sqlVal = val;
+        if (val && val.type === 'sql') {
+            sqlVal = val.sql;
+        } else if (typeof val === 'string') {
+            if (this.isEnum) {
+                sqlVal = `'${val}'::"${this.enumName}"`;
+            } else {
+                sqlVal = `'${val.replace(/'/g, "''")}'`;
+            }
+        }
+        this.modifiers.push(`DEFAULT ${sqlVal}`);
+        return this;
+    };
+}
+
+if (!Object.prototype.defaultRandom) {
+    Object.prototype.defaultRandom = function () {
+        this.modifiers.push('DEFAULT gen_random_uuid()');
+        return this;
+    };
+}

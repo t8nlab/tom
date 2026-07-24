@@ -25,6 +25,8 @@ export interface Column {
     default(val: any): Column;
     /** Set the default value to the current timestamp. */
     defaultNow(): Column;
+    /** Set the default value to a randomly generated UUID. */
+    defaultRandom(): Column;
     /** 
      * Define a foreign key reference.
      * @example .references(users.id, { onDelete: 'cascade' })
@@ -42,14 +44,21 @@ export type Table<T = Record<string, Column>> = {
     name: string;
     /** The column definitions. */
     columns: T;
+    /** Custom table indexes. */
+    indexes?: Index[];
 } & T;
 
 /**
  * Define a PostgreSQL table schema.
  * @param name The table name in the database.
  * @param columns Column definitions.
+ * @param extraConfig Callback to define indexes on the table.
  */
-export function pgTable<T extends Record<string, Column>>(name: string, columns: T): Table<T>;
+export function pgTable<T extends Record<string, Column>>(
+    name: string, 
+    columns: T, 
+    extraConfig?: (table: T) => Index[] | Record<string, Index>
+): Table<T>;
 
 /** 
  * UUID (Universally Unique Identifier) type.
@@ -112,6 +121,74 @@ export function json(name: string): Column;
  * @param name The column name in the database.
  */
 export function decimal(name: string): Column;
+
+/**
+ * Represents a custom enum column type.
+ */
+export interface EnumColumn extends Column {
+    isEnum: true;
+    enumName: string;
+}
+
+/**
+ * Represents a custom enum helper definition.
+ */
+export interface EnumDefinition {
+    (colName: string): EnumColumn;
+    isEnumDefinition: true;
+    enumName: string;
+    values: string[];
+}
+
+/**
+ * Define a custom PostgreSQL enum type.
+ * @param name Enum type name.
+ * @param values Allowed enum values.
+ */
+export function pgEnum(name: string, values: string[]): EnumDefinition;
+
+/**
+ * Define a custom numeric (arbitrary precision) decimal type.
+ * @param name The column name in the database.
+ * @param opts Numeric options including precision and scale.
+ */
+export function numeric(name: string, opts?: { precision?: number; scale?: number }): Column;
+
+/**
+ * Represents a database index.
+ */
+export interface Index {
+    name: string;
+    isUnique: boolean;
+    columns: any[];
+    on(...columns: Column[]): Index;
+}
+
+/**
+ * Define a standard database index.
+ * @param name Index name.
+ */
+export function index(name: string): Index;
+
+/**
+ * Define a unique database index.
+ * @param name Index name.
+ */
+export function uniqueIndex(name: string): Index;
+
+/**
+ * Represents an arbitrary SQL string template.
+ */
+export interface Sql {
+    type: 'sql';
+    sql: string;
+    toString(): string;
+}
+
+/**
+ * Template tag or function to generate raw SQL defaults/expressions.
+ */
+export function sql(strings: TemplateStringsArray | string, ...values: any[]): Sql;
 
 /**
  * TomResult type. 

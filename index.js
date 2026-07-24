@@ -30,7 +30,12 @@ export const {
     eq,
     and,
     or,
-    param
+    param,
+    pgEnum,
+    numeric,
+    index,
+    uniqueIndex,
+    sql
 } = dsl;
 
 export { deleteFrom as delete };

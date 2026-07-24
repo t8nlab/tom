@@ -120,14 +120,28 @@ async function getDbURI() {
     return null;
 }
 
+function getForeignKeyName(table, col, refTable, refCol) {
+    const name = `${table}_${col}_${refTable}_${refCol}_fkey`;
+    if (name.length <= 60) return name;
+    let hash = 0;
+    const str = `${table}_${col}_${refTable}_${refCol}`;
+    for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i);
+        hash |= 0;
+    }
+    const hashStr = Math.abs(hash).toString(36).substring(0, 12);
+    return `${table}_${hashStr}_fkey`;
+}
+
 async function generate() {
     const config = await getConfig();
     console.log(`${icon} ${tomTag} Generating schema and queries...`);
 
-    // 1. Scan schema for tables
+    // 1. Scan schema for tables and enums
     const schemaDir = path.join(CWD, config.schema);
 
     const tables = [];
+    const enums = [];
     const files = (await fs.readdir(schemaDir)).filter(f => f.endsWith('.js'));
     for (const file of files) {
         try {
@@ -136,6 +150,9 @@ async function generate() {
                 if (val && val.type === 'table') {
                     console.log(`  - Found table: ${colors.cyan}${val.name}${colors.reset}`);
                     tables.push(val);
+                } else if (val && val.isEnumDefinition) {
+                    console.log(`  - Found enum: ${colors.cyan}${val.enumName}${colors.reset}`);
+                    enums.push(val);
                 }
             });
         } catch (e) {
@@ -143,39 +160,72 @@ async function generate() {
         }
     }
 
-
-
     // 2. Load Previous Snapshot for Diffing
     const snapshotPath = path.join(CWD, '.titan', 'tom', 'snapshot.json');
     let previousSnapshot = null;
     try {
         previousSnapshot = JSON.parse(await fs.readFile(snapshotPath, 'utf-8'));
-    } catch (e) {}
+        // Handle migration from old array-of-tables format
+        if (Array.isArray(previousSnapshot)) {
+            previousSnapshot = {
+                enums: [],
+                tables: previousSnapshot.map(t => ({
+                    name: t.name,
+                    columns: t.columns.map(c => ({
+                        name: c.name,
+                        type: c.type,
+                        modifiers: c.modifiers || [],
+                        reference: null
+                    })),
+                    indexes: []
+                }))
+            };
+        }
+    } catch (e) {
+        previousSnapshot = { enums: [], tables: [] };
+    }
 
-    const currentSnapshot = tables.map(t => ({
-        name: t.name,
-        columns: Object.values(t.columns).map(c => ({
-            name: c.name,
-            type: c.type,
-            modifiers: c.modifiers
+    const currentSnapshot = {
+        enums: enums.map(e => ({
+            name: e.enumName,
+            values: e.values
+        })),
+        tables: tables.map(t => ({
+            name: t.name,
+            columns: Object.values(t.columns).map(c => ({
+                name: c.name,
+                type: c.type,
+                modifiers: (c.modifiers || []).filter(m => !m.startsWith('REFERENCES')),
+                reference: c.reference ? {
+                    table: c.reference.column.table.name,
+                    column: c.reference.column.name,
+                    onDelete: c.reference.opts?.onDelete,
+                    onUpdate: c.reference.opts?.onUpdate
+                } : null
+            })),
+            indexes: (t.indexes || []).map(idx => ({
+                name: idx.name,
+                isUnique: idx.isUnique,
+                columns: idx.columns.map(c => c.name || c)
+            }))
         }))
-    }));
+    };
 
     // 2.5 Check if migrations are missing
     const migrationsDir = path.join(CWD, config.migrations);
     try {
         await fs.mkdir(migrationsDir, { recursive: true });
         const existingSqlFiles = (await fs.readdir(migrationsDir)).filter(f => f.endsWith('.sql'));
-        if (existingSqlFiles.length === 0 && previousSnapshot) {
+        if (existingSqlFiles.length === 0 && previousSnapshot && previousSnapshot.tables.length > 0) {
             console.log(`${icon} ${tomTag} ${colors.yellow}No migration files found. Clearing snapshot to re-generate initial migration.${colors.reset}`);
-            previousSnapshot = null;
+            previousSnapshot = { enums: [], tables: [] };
         }
     } catch (e) {}
 
     // 3. Interactive Risk Assessment
-    if (previousSnapshot) {
-        for (const prevTable of previousSnapshot) {
-            const currentTable = currentSnapshot.find(t => t.name === prevTable.name);
+    if (previousSnapshot && previousSnapshot.tables && previousSnapshot.tables.length > 0) {
+        for (const prevTable of previousSnapshot.tables) {
+            const currentTable = currentSnapshot.tables.find(t => t.name === prevTable.name);
             if (!currentTable) {
                 console.warn(`\n${colors.yellow}${colors.bold}⚠️  RISK: Table "${prevTable.name}" is missing from schema.${colors.reset}`);
                 const confirm = await ask(`Do you want to drop table "${prevTable.name}"? (This will ${colors.red}DELETE ALL DATA${colors.reset}) [y/N]: `);
@@ -206,80 +256,235 @@ async function generate() {
     // 4. Build Migration SQL
     let migrationSql = `-- Generated by tom\n`;
     let hasChanges = false;
+    const isInitial = !previousSnapshot || !previousSnapshot.tables || previousSnapshot.tables.length === 0;
 
-    if (!previousSnapshot) {
-        // Initial migration
-        tables.forEach(table => {
-            migrationSql += `CREATE TABLE IF NOT EXISTS ${table.name} (\n`;
-            const columns = Object.values(table.columns).map(col => {
-                let line = `  ${col.name} ${col.type}`;
+    if (isInitial) {
+        // Enums
+        currentSnapshot.enums.forEach(e => {
+            migrationSql += `CREATE TYPE "${e.name}" AS ENUM(${e.values.map(v => `'${v}'`).join(', ')});--> statement-breakpoint\n`;
+        });
+        if (currentSnapshot.enums.length > 0) migrationSql += '\n';
+
+        // Tables
+        currentSnapshot.tables.forEach(table => {
+            migrationSql += `CREATE TABLE "${table.name}" (\n`;
+            const columns = table.columns.map(col => {
+                let colType = col.type;
+                if (colType.toUpperCase() === 'TIMESTAMPTZ') {
+                    colType = 'timestamp with time zone';
+                }
+                let line = `\t"${col.name}" ${colType}`;
                 if (col.modifiers.length > 0) line += ` ${col.modifiers.join(' ')}`;
                 return line;
             });
             migrationSql += columns.join(',\n');
-            migrationSql += '\n);\n\n';
+            migrationSql += '\n);\n--> statement-breakpoint\n';
         });
 
-        hasChanges = true;
+        // Indexes
+        currentSnapshot.tables.forEach(table => {
+            table.indexes.forEach(idx => {
+                const uniqueStr = idx.isUnique ? 'UNIQUE ' : '';
+                const colsStr = idx.columns.map(c => `"${c}"`).join(',');
+                migrationSql += `CREATE ${uniqueStr}INDEX "${idx.name}" ON "${table.name}" (${colsStr});--> statement-breakpoint\n`;
+            });
+        });
+
+        // Foreign Key Constraints
+        currentSnapshot.tables.forEach(table => {
+            table.columns.forEach(col => {
+                if (col.reference) {
+                    const ref = col.reference;
+                    const constraintName = getForeignKeyName(table.name, col.name, ref.table, ref.column);
+                    let alterSql = `ALTER TABLE "${table.name}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY ("${col.name}") REFERENCES "${ref.table}"("${ref.column}")`;
+                    if (ref.onDelete) {
+                        alterSql += ` ON DELETE ${ref.onDelete.toUpperCase()}`;
+                    }
+                    if (ref.onUpdate) {
+                        alterSql += ` ON UPDATE ${ref.onUpdate.toUpperCase()}`;
+                    }
+                    migrationSql += `${alterSql};--> statement-breakpoint\n`;
+                }
+            });
+        });
+
+        hasChanges = currentSnapshot.tables.length > 0 || currentSnapshot.enums.length > 0;
     } else {
-        // Incremental migration (ALTER TABLE)
-        for (const currentTable of currentSnapshot) {
-            const prevTable = previousSnapshot.find(t => t.name === currentTable.name);
-            if (!prevTable) {
-                // New Table
-                const tableObj = tables.find(t => t.name === currentTable.name);
-                migrationSql += `CREATE TABLE IF NOT EXISTS ${currentTable.name} (\n`;
-                const columns = Object.values(tableObj.columns).map(col => {
-                    let line = `  ${col.name} ${col.type}`;
+        // Incremental Enums
+        currentSnapshot.enums.forEach(e => {
+            const prev = previousSnapshot.enums.find(pe => pe.name === e.name);
+            if (!prev) {
+                migrationSql += `CREATE TYPE "${e.name}" AS ENUM(${e.values.map(v => `'${v}'`).join(', ')});--> statement-breakpoint\n`;
+                hasChanges = true;
+            }
+        });
+
+        // Drop tables (and constraints)
+        previousSnapshot.tables.forEach(prevTable => {
+            const currentTable = currentSnapshot.tables.find(t => t.name === prevTable.name);
+            if (!currentTable) {
+                prevTable.columns.forEach(col => {
+                    if (col.reference) {
+                        const constraintName = getForeignKeyName(prevTable.name, col.name, col.reference.table, col.reference.column);
+                        migrationSql += `ALTER TABLE "${prevTable.name}" DROP CONSTRAINT IF EXISTS "${constraintName}";--> statement-breakpoint\n`;
+                    }
+                });
+                migrationSql += `DROP TABLE "${prevTable.name}";--> statement-breakpoint\n`;
+                hasChanges = true;
+            }
+        });
+
+        // Create new tables
+        currentSnapshot.tables.forEach(table => {
+            const prev = previousSnapshot.tables.find(pt => pt.name === table.name);
+            if (!prev) {
+                migrationSql += `CREATE TABLE "${table.name}" (\n`;
+                const columns = table.columns.map(col => {
+                    let colType = col.type;
+                    if (colType.toUpperCase() === 'TIMESTAMPTZ') {
+                        colType = 'timestamp with time zone';
+                    }
+                    let line = `\t"${col.name}" ${colType}`;
                     if (col.modifiers.length > 0) line += ` ${col.modifiers.join(' ')}`;
                     return line;
                 });
                 migrationSql += columns.join(',\n');
-                migrationSql += '\n);\n\n';
+                migrationSql += '\n);\n--> statement-breakpoint\n';
+
+                // Indexes
+                table.indexes.forEach(idx => {
+                    const uniqueStr = idx.isUnique ? 'UNIQUE ' : '';
+                    const colsStr = idx.columns.map(c => `"${c}"`).join(',');
+                    migrationSql += `CREATE ${uniqueStr}INDEX "${idx.name}" ON "${table.name}" (${colsStr});--> statement-breakpoint\n`;
+                });
+
+                // Foreign Keys
+                table.columns.forEach(col => {
+                    if (col.reference) {
+                        const ref = col.reference;
+                        const constraintName = getForeignKeyName(table.name, col.name, ref.table, ref.column);
+                        let alterSql = `ALTER TABLE "${table.name}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY ("${col.name}") REFERENCES "${ref.table}"("${ref.column}")`;
+                        if (ref.onDelete) {
+                            alterSql += ` ON DELETE ${ref.onDelete.toUpperCase()}`;
+                        }
+                        if (ref.onUpdate) {
+                            alterSql += ` ON UPDATE ${ref.onUpdate.toUpperCase()}`;
+                        }
+                        migrationSql += `${alterSql};--> statement-breakpoint\n`;
+                    }
+                });
                 hasChanges = true;
-            } else {
-                // Existing Table: Check for new columns
-                for (const currentCol of currentTable.columns) {
+            }
+        });
+
+        // Alter existing tables
+        currentSnapshot.tables.forEach(currentTable => {
+            const prevTable = previousSnapshot.tables.find(t => t.name === currentTable.name);
+            if (prevTable) {
+                // New or modified columns
+                currentTable.columns.forEach(currentCol => {
                     const prevCol = prevTable.columns.find(c => c.name === currentCol.name);
                     if (!prevCol) {
-                        migrationSql += `ALTER TABLE ${currentTable.name} ADD COLUMN IF NOT EXISTS ${currentCol.name} ${currentCol.type}`;
-                        if (currentCol.modifiers.length > 0) migrationSql += ` ${currentCol.modifiers.join(' ')}`;
-                        migrationSql += ';\n';
+                        let colType = currentCol.type;
+                        if (colType.toUpperCase() === 'TIMESTAMPTZ') {
+                            colType = 'timestamp with time zone';
+                        }
+                        let alterSql = `ALTER TABLE "${currentTable.name}" ADD COLUMN "${currentCol.name}" ${colType}`;
+                        if (currentCol.modifiers.length > 0) alterSql += ` ${currentCol.modifiers.join(' ')}`;
+                        migrationSql += `${alterSql};--> statement-breakpoint\n`;
+
+                        if (currentCol.reference) {
+                            const ref = currentCol.reference;
+                            const constraintName = getForeignKeyName(currentTable.name, currentCol.name, ref.table, ref.column);
+                            let fkSql = `ALTER TABLE "${currentTable.name}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY ("${currentCol.name}") REFERENCES "${ref.table}"("${ref.column}")`;
+                            if (ref.onDelete) {
+                                fkSql += ` ON DELETE ${ref.onDelete.toUpperCase()}`;
+                            }
+                            if (ref.onUpdate) {
+                                fkSql += ` ON UPDATE ${ref.onUpdate.toUpperCase()}`;
+                            }
+                            migrationSql += `${fkSql};--> statement-breakpoint\n`;
+                        }
                         hasChanges = true;
-                    } else if (prevCol.type !== currentCol.type) {
-                        // Type changed!
-                        migrationSql += `ALTER TABLE ${currentTable.name} ALTER COLUMN ${currentCol.name} SET DATA TYPE ${currentCol.type} USING ${currentCol.name}::${currentCol.type};\n`;
-                        hasChanges = true;
+                    } else {
+                        // Check type change
+                        if (prevCol.type !== currentCol.type) {
+                            let colType = currentCol.type;
+                            if (colType.toUpperCase() === 'TIMESTAMPTZ') {
+                                colType = 'timestamp with time zone';
+                            }
+                            migrationSql += `ALTER TABLE "${currentTable.name}" ALTER COLUMN "${currentCol.name}" SET DATA TYPE ${colType} USING "${currentCol.name}"::${colType};--> statement-breakpoint\n`;
+                            hasChanges = true;
+                        }
+
+                        // Check FK change
+                        const prevRef = prevCol.reference;
+                        const currentRef = currentCol.reference;
+                        const prevRefKey = prevRef ? `${prevRef.table}.${prevRef.column}.${prevRef.onDelete || ''}.${prevRef.onUpdate || ''}` : '';
+                        const currentRefKey = currentRef ? `${currentRef.table}.${currentRef.column}.${currentRef.onDelete || ''}.${currentRef.onUpdate || ''}` : '';
+                        if (prevRefKey !== currentRefKey) {
+                            if (prevRef) {
+                                const constraintName = getForeignKeyName(currentTable.name, currentCol.name, prevRef.table, prevRef.column);
+                                migrationSql += `ALTER TABLE "${currentTable.name}" DROP CONSTRAINT IF EXISTS "${constraintName}";--> statement-breakpoint\n`;
+                            }
+                            if (currentRef) {
+                                const constraintName = getForeignKeyName(currentTable.name, currentCol.name, currentRef.table, currentRef.column);
+                                let fkSql = `ALTER TABLE "${currentTable.name}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY ("${currentCol.name}") REFERENCES "${currentRef.table}"("${currentRef.column}")`;
+                                if (currentRef.onDelete) {
+                                    fkSql += ` ON DELETE ${currentRef.onDelete.toUpperCase()}`;
+                                }
+                                if (currentRef.onUpdate) {
+                                    fkSql += ` ON UPDATE ${currentRef.onUpdate.toUpperCase()}`;
+                                }
+                                migrationSql += `${fkSql};--> statement-breakpoint\n`;
+                            }
+                            hasChanges = true;
+                        }
                     }
-                }
-                // Check for dropped columns
-                for (const prevCol of prevTable.columns) {
+                });
+
+                // Dropped columns
+                prevTable.columns.forEach(prevCol => {
                     const currentCol = currentTable.columns.find(c => c.name === prevCol.name);
                     if (!currentCol) {
-                        // User already confirmed in Risk Assessment step
-                        migrationSql += `ALTER TABLE ${currentTable.name} DROP COLUMN IF EXISTS ${prevCol.name};\n`;
+                        if (prevCol.reference) {
+                            const constraintName = getForeignKeyName(currentTable.name, prevCol.name, prevCol.reference.table, prevCol.reference.column);
+                            migrationSql += `ALTER TABLE "${currentTable.name}" DROP CONSTRAINT IF EXISTS "${constraintName}";--> statement-breakpoint\n`;
+                        }
+                        migrationSql += `ALTER TABLE "${currentTable.name}" DROP COLUMN "${prevCol.name}";--> statement-breakpoint\n`;
                         hasChanges = true;
                     }
-                }
-            }
-        }
-        
-        // Check for dropped tables
-        for (const prevTable of previousSnapshot) {
-            const currentTable = currentSnapshot.find(t => t.name === prevTable.name);
-            if (!currentTable) {
-                migrationSql += `DROP TABLE IF EXISTS ${prevTable.name};\n`;
-                hasChanges = true;
-            }
-        }
+                });
 
+                // Dropped indexes
+                prevTable.indexes = prevTable.indexes || [];
+                prevTable.indexes.forEach(prevIdx => {
+                    const currentIdx = currentTable.indexes.find(idx => idx.name === prevIdx.name);
+                    if (!currentIdx) {
+                        migrationSql += `DROP INDEX IF EXISTS "${prevIdx.name}";--> statement-breakpoint\n`;
+                        hasChanges = true;
+                    }
+                });
+
+                // New indexes
+                currentTable.indexes.forEach(currentIdx => {
+                    const prevIdx = prevTable.indexes.find(idx => idx.name === currentIdx.name);
+                    if (!prevIdx) {
+                        const uniqueStr = currentIdx.isUnique ? 'UNIQUE ' : '';
+                        const colsStr = currentIdx.columns.map(c => `"${c}"`).join(',');
+                        migrationSql += `CREATE ${uniqueStr}INDEX "${currentIdx.name}" ON "${currentTable.name}" (${colsStr});--> statement-breakpoint\n`;
+                        hasChanges = true;
+                    }
+                });
+            }
+        });
     }
 
     if (!hasChanges) {
         console.log(`${icon} ${tomTag} No schema changes detected.`);
     } else {
         await fs.mkdir(migrationsDir, { recursive: true });
-        
+
         const existingFiles = (await fs.readdir(migrationsDir)).filter(f => f.endsWith('.sql'));
         let maxIndex = -1;
         existingFiles.forEach(f => {
@@ -287,9 +492,8 @@ async function generate() {
             if (!isNaN(idx) && idx > maxIndex) maxIndex = idx;
         });
         const nextIndex = maxIndex + 1;
-        const fileName = `${String(nextIndex).padStart(3, '0')}_${previousSnapshot ? 'update' : 'initial'}.sql`;
+        const fileName = `${String(nextIndex).padStart(3, '0')}_${isInitial ? 'initial' : 'update'}.sql`;
 
-        
         await fs.writeFile(path.join(migrationsDir, fileName), migrationSql);
         console.log(`${colors.green}✓ Migration generated:${colors.reset} ${config.migrations}/${fileName}`);
     }
@@ -298,8 +502,6 @@ async function generate() {
     const outputDir = path.join(CWD, '.titan', 'tom');
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(snapshotPath, JSON.stringify(currentSnapshot, null, 2));
-
-
 
     // 3. Compile Queries
     const queriesDir = path.join(CWD, config.queries);
