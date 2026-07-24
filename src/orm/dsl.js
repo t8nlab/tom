@@ -29,7 +29,7 @@ export class QueryBuilder {
     }
     limit(n) { this.state.limit = n; return this; }
     values(vals) {
-        if (vals && vals.type === 'table') {
+        if (vals && String(vals.type) === 'table') {
             this.state.values = {};
             Object.keys(vals.columns).forEach(key => {
                 this.state.values[key] = param(key);
@@ -40,7 +40,7 @@ export class QueryBuilder {
         return this;
     }
     set(vals) {
-        if (vals && vals.type === 'table') {
+        if (vals && String(vals.type) === 'table') {
             this.state.set = {};
             Object.keys(vals.columns).forEach(key => {
                 this.state.set[key] = param(key);
@@ -51,7 +51,7 @@ export class QueryBuilder {
         return this;
     }
     returning(cols) {
-        if (cols && cols.type === 'table') {
+        if (cols && String(cols.type) === 'table') {
             this.state.returning = Object.keys(cols.columns);
         } else {
             this.state.returning = cols;
@@ -318,18 +318,6 @@ export function pgTable(name, columns, extraConfig) {
         }
     });
 
-    // Evaluate index callbacks if present
-    if (typeof extraConfig === 'function') {
-        const result = extraConfig(table);
-        if (Array.isArray(result)) {
-            table.indexes.push(...result);
-        } else if (result && typeof result === 'object') {
-            Object.values(result).forEach(idx => {
-                table.indexes.push(idx);
-            });
-        }
-    }
-
     // If there is a column named 'name', wrap it to behave as the table name string
     if (columns.name) {
         const col = columns.name;
@@ -350,7 +338,7 @@ export function pgTable(name, columns, extraConfig) {
         columns.type = specialType;
     }
 
-    return new Proxy(table, {
+    const proxy = new Proxy(table, {
         get(target, prop) {
             if (typeof prop === 'string' && target.columns[prop]) {
                 return target.columns[prop];
@@ -358,6 +346,20 @@ export function pgTable(name, columns, extraConfig) {
             return target[prop];
         }
     });
+
+    // Evaluate index callbacks if present
+    if (typeof extraConfig === 'function') {
+        const result = extraConfig(proxy);
+        if (Array.isArray(result)) {
+            table.indexes.push(...result);
+        } else if (result && typeof result === 'object') {
+            Object.values(result).forEach(idx => {
+                table.indexes.push(idx);
+            });
+        }
+    }
+
+    return proxy;
 }
 
 export function select(table) { return new QueryBuilder(table, 'select'); }

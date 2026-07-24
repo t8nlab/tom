@@ -147,7 +147,7 @@ async function generate() {
         try {
             const module = await import(pathToFileURL(path.join(schemaDir, file)));
             Object.values(module).forEach(val => {
-                if (val && val.type === 'table') {
+                if (val && String(val.type) === 'table') {
                     console.log(`  - Found table: ${colors.cyan}${val.name}${colors.reset}`);
                     tables.push(val);
                 } else if (val && val.isEnumDefinition) {
@@ -191,13 +191,13 @@ async function generate() {
             values: e.values
         })),
         tables: tables.map(t => ({
-            name: t.name,
+            name: String(t.name),
             columns: Object.values(t.columns).map(c => ({
                 name: c.name,
-                type: c.type,
+                type: String(c.type),
                 modifiers: (c.modifiers || []).filter(m => !m.startsWith('REFERENCES')),
                 reference: c.reference ? {
-                    table: c.reference.column.table.name,
+                    table: String(c.reference.column.table.name),
                     column: c.reference.column.name,
                     onDelete: c.reference.opts?.onDelete,
                     onUpdate: c.reference.opts?.onUpdate
